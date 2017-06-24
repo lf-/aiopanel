@@ -9,7 +9,7 @@ from typing import Any, Container, Dict, List
 from gi.repository import GLib
 import gbulb
 
-APP_NAME = 'pypanel'
+APP_NAME = 'aiopanel'
 CACHE_DIR = Path(GLib.get_user_cache_dir()) / APP_NAME
 CONFIG_DIR = Path(GLib.get_user_config_dir()) / APP_NAME
 
