@@ -2,6 +2,7 @@ import abc
 import argparse
 import asyncio
 from asyncio.subprocess import DEVNULL, PIPE
+import datetime
 import logging
 from pathlib import Path
 from typing import Any, Container, Dict, List
@@ -78,8 +79,8 @@ class Widget(metaclass=abc.ABCMeta):
                           update this widget
         """
         while True:
-            await asyncio.sleep(1)
             await request_update()
+            await asyncio.sleep(1)
 
 
 class StaticWidget(Widget):
@@ -99,6 +100,30 @@ class StaticWidget(Widget):
     async def watch(self, request_update) -> None:
         # do nothing because this widget never changes
         await request_update()
+
+
+class DateTimeWidget(Widget):
+    """
+    A widget that displays the date
+    """
+    def __init__(self, fmt: str, update: int = 1) -> None:
+        """
+        Parameters:
+        fmt -- strftime() compatible format string. Example: '%b %-d %H:%M'
+               Output: 'Jun 23 21:12'
+        update -- update interval in seconds
+        """
+        self._format = fmt
+        self._update = update
+
+    async def update(self) -> str:
+        return datetime.datetime.strftime(datetime.datetime.now(),
+                                          self._format)
+
+    async def watch(self, request_update) -> None:
+        while True:
+            await request_update()
+            await asyncio.sleep(self._update)
 
 
 class PanelAdapter(metaclass=abc.ABCMeta):
@@ -177,15 +202,25 @@ class Panel:
         """
         out = {}
         for (pos, widgets) in self._widgets.items():
-            out[pos] = ''.join([self._widget_state[w] for w in widgets])
+            out[pos] = ''.join(self._widget_state.get(w, '') for w in widgets)
         return self._out_fmt.format(**out)
+
+    def _start_widget(self, widget: Widget):
+        """
+        Starts a widget's watch routine
+
+        Parameters:
+        widget -- widget to start up
+        """
+        async def request_update() -> None:
+            # log.debug('widget %s requested update', widget)
+            await self._update_queue.put_unique(widget)
+        asyncio.ensure_future(widget.watch(request_update))
 
     async def _init_widgets(self) -> None:
         for (pos, widgets) in self._widgets.items():
             for widget in widgets:
-                async def request_update() -> None:
-                    await self._update_queue.put_unique(widget)
-                asyncio.ensure_future(widget.watch(request_update))
+                self._start_widget(widget)
         log.info('Widgets initialized')
 
     async def run(self) -> None:
