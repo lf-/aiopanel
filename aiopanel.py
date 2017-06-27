@@ -5,10 +5,17 @@ from asyncio.subprocess import DEVNULL, PIPE
 import datetime
 import logging
 from pathlib import Path
-from typing import Any, Container, Dict, List, NamedTuple
+from typing import Any, Callable, Container, Dict, List, NamedTuple
 
 from gi.repository import GLib
 import gbulb
+
+try:
+    import aiobspwm
+except ImportError:
+    # just raise if bspwm features are used
+    log.info('aiobspwm not found, bspwm features will be unavailable')
+
 
 APP_NAME = 'aiopanel'
 CACHE_DIR = Path(GLib.get_user_cache_dir()) / APP_NAME
@@ -124,6 +131,70 @@ class DateTimeWidget(Widget):
         while True:
             await request_update()
             await asyncio.sleep(self._update)
+
+
+class BspwmWidget(Widget):
+    def __init__(self, fmt: str, mon_fmt: str, desk_fmt: str,
+                 mon_sep: str = '', desk_sep: str = '',
+                 sock: str = None) -> None:
+        """
+        Parameters:
+        fmt -- format string for the entire widget
+               Context:
+               - monitors (mon_fmt joined for each monitor)
+               - wm (aiobspwm.WM object)
+        mon_fmt -- format string for each monitor
+                   Context:
+                   - desktops (desk_fmt for each desktop)
+                   - monitor (Monitor object for this monitor)
+        desk_fmt -- format string for each desktop
+                    Context:
+                    - desktop (Desktop object for this desktop)
+
+        Optional parameters:
+        mon_sep -- separator between iterations of mon_fmt
+        desk_sep -- separator between iterations of desk_fmt
+        sock -- alternate bspwm socket to use. Default is to find it
+                automagically.
+        """
+        if 'aiobspwm' not in globals():
+            raise ImportError('aiobspwm is required for BspwmWidget, but '
+                              'was not found')
+        self._fmt = fmt
+        self._mon_fmt = mon_fmt
+        self._desk_fmt = desk_fmt
+        self._mon_sep = mon_sep
+        self._desk_sep = desk_sep
+        sock = sock or aiobspwm.find_socket()
+        self._updated = asyncio.Event()
+        self._updated.set()
+        self._wm = aiobspwm.WM(sock, evt_hook=lambda ln: self._updated.set())
+        self._wm_initialised = False
+
+    def _update(self, wm: 'aiobspwm.WM') -> str:
+        formatted_monitors: List[str] = []
+        for mon in wm.monitors.values():
+            formatted_desktops: List[str] = []
+            for desktop in mon.desktops.values():
+                formatted_desktops += self._desk_fmt.format(desktop=desktop)
+            desks = self._desk_sep.join(formatted_desktops)
+            formatted_monitors += self._mon_fmt.format(desktops=desks,
+                                                       monitor=mon)
+        mons = self._mon_sep.join(formatted_monitors)
+        return self._fmt.format(wm=wm, monitors=mons)
+
+    async def update(self) -> str:
+        if not self._wm_initialised:
+            await self._wm.start()
+            asyncio.ensure_future(self._wm.run())
+        return self._update(self._wm)
+
+    async def watch(self, request_update: Callable[[], None]) -> None:
+        while True:
+            log.debug('watch bspwm')
+            await self._updated.wait()
+            await request_update()
+            self._updated.clear()
 
 
 class PanelAdapter(metaclass=abc.ABCMeta):
