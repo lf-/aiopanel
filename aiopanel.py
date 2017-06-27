@@ -5,7 +5,7 @@ from asyncio.subprocess import DEVNULL, PIPE
 import datetime
 import logging
 from pathlib import Path
-from typing import Any, Container, Dict, List
+from typing import Any, Container, Dict, List, NamedTuple
 
 from gi.repository import GLib
 import gbulb
@@ -227,6 +227,8 @@ class Panel:
         await self._init_widgets()
         while True:
             widget = await self._update_queue.get()
+            # XXX: this is effectively a blocking operation and should
+            #      somehow be concurrent-ised
             self._widget_state[widget] = await widget.update()
             await self.redraw()
 
