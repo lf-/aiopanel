@@ -9,6 +9,7 @@ from typing import Any, Callable, Container, Dict, List, NamedTuple
 
 from gi.repository import GLib
 import gbulb
+import jinja2
 
 try:
     import aiobspwm
@@ -134,66 +135,51 @@ class DateTimeWidget(Widget):
 
 
 class BspwmWidget(Widget):
-    def __init__(self, fmt: str, mon_fmt: str, desk_fmt: str,
-                 mon_sep: str = '', desk_sep: str = '',
-                 sock: str = None) -> None:
+    """
+    A widget for displaying bspwm status based on aiobspwm.
+    """
+    def __init__(self, template: str, sock: str = None,
+                 ctx: Dict[str, Any] = {}) -> None:
         """
         Parameters:
-        fmt -- format string for the entire widget
-               Context:
-               - monitors (mon_fmt joined for each monitor)
-               - wm (aiobspwm.WM object)
-        mon_fmt -- format string for each monitor
-                   Context:
-                   - desktops (desk_fmt for each desktop)
-                   - monitor (Monitor object for this monitor)
-        desk_fmt -- format string for each desktop
+        template -- jinja2 template string for the widget's display
                     Context:
-                    - desktop (Desktop object for this desktop)
-
-        Optional parameters:
-        mon_sep -- separator between iterations of mon_fmt
-        desk_sep -- separator between iterations of desk_fmt
-        sock -- alternate bspwm socket to use. Default is to find it
+                    - wm (aiobspwm.WM object)
+                    - ctx
+        sock -- alternate bspwm socket path to use. Default is to find it
                 automagically.
+        ctx -- extra context to pass to templating stage (allows for
+               parameterisation of the template)
         """
         if 'aiobspwm' not in globals():
             raise ImportError('aiobspwm is required for BspwmWidget, but '
                               'was not found')
-        self._fmt = fmt
-        self._mon_fmt = mon_fmt
-        self._desk_fmt = desk_fmt
-        self._mon_sep = mon_sep
-        self._desk_sep = desk_sep
-        sock = sock or aiobspwm.find_socket()
-        self._updated = asyncio.Event()
-        self._updated.set()
-        self._wm = aiobspwm.WM(sock, evt_hook=lambda ln: self._updated.set())
-        self._wm_initialised = False
+        self._template = jinja2.Template(template, autoescape=False)
+        self._sock = sock or aiobspwm.find_socket()
+        self._ctx = ctx
 
-    def _update(self, wm: 'aiobspwm.WM') -> str:
-        formatted_monitors: List[str] = []
-        for mon in wm.monitors.values():
-            formatted_desktops: List[str] = []
-            for desktop in mon.desktops.values():
-                formatted_desktops += self._desk_fmt.format(desktop=desktop)
-            desks = self._desk_sep.join(formatted_desktops)
-            formatted_monitors += self._mon_fmt.format(desktops=desks,
-                                                       monitor=mon)
-        mons = self._mon_sep.join(formatted_monitors)
-        return self._fmt.format(wm=wm, monitors=mons)
+    def format(self, wm: 'aiobspwm.WM') -> str:
+        """
+        Take a WM object and return a formatted-up version
+        """
+        return self._template.render(wm=wm, ctx=self._ctx)
 
     async def update(self) -> str:
-        if not self._wm_initialised:
+        if not hasattr(self, '_wm'):
+            # this is here to mitigate issues with the event loop not
+            # being initialised on config load (and thus __init__)
+            self._updated.set()
+            self._wm = aiobspwm.WM(self._sock,
+                    evt_hook=lambda ln: self._updated.set())
             await self._wm.start()
             asyncio.ensure_future(self._wm.run())
-        return self._update(self._wm)
+        return self.format(self._wm)
 
     async def watch(self, request_update: Callable[[], None]) -> None:
+        self._updated = asyncio.Event()
         while True:
-            log.debug('watch bspwm')
-            await self._updated.wait()
             await request_update()
+            await self._updated.wait()
             self._updated.clear()
 
 
@@ -228,9 +214,10 @@ class SubprocessAdapter(PanelAdapter):
         )
 
     async def write(self, panel_value):
-        if not self._process:
+        if not hasattr(self, '_process'):
             self._process = await self._process_coro
-        self._process.stdin.write(panel_value + '\n')
+        self._process.stdin.write((panel_value + '\n').encode('utf-8'))
+        await self._process.stdin.drain()
 
 
 class StdoutAdapter(PanelAdapter):
