@@ -8,10 +8,13 @@ if pip_version < (9, 0, 1) :
     raise RuntimeError('Version of pip less than 9.0.1, breaking python ' \
                        'version requirement support')
 
+with open('version.txt', 'rb') as h:
+    version = h.read().decode('utf-8').rstrip('\n')
+
 
 setuptools.setup(
     name = 'aiopanel',
-    version = '0.1',
+    version = version,
     py_modules = ['aiopanel'],
     python_requires = '>=3.6',
     entry_points = {
