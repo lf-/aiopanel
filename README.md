@@ -1,6 +1,6 @@
 # aiopanel
 
-An asyncio text-based panel system.
+An `asyncio` text-based panel system.
 
 This is completely WM/bar agnostic. Obviously there are WM specific widgets,
 however their WM specific dependencies are all optional like the widgets
@@ -17,11 +17,11 @@ Make it as simple as possible to write widgets (I think it is even possible
 to define new ones directly in the config file, but runpy docs make no
 guarantee of this working).
 
-This simplicity is achieved through the use of asyncio.
+This simplicity is achieved through the use of `asyncio`.
 
 ## Requirements
 
-- Python 3.6+ (f-strings and asyncio changes)
+- Python 3.6+ (`f`-strings and `asyncio` changes)
 - jinja2 (all templating)
 - gbulb + GLib (event loop, will be used for DBus widget subscriptions)
 - aiobspwm (optional, for bspwm widget)
@@ -31,7 +31,7 @@ This simplicity is achieved through the use of asyncio.
 Config file is at `~/.config/aiopanel/config.py`<br/>
 Log file is at `~/.cache/aiopanel/aiopanel.log`
 
-Example config for a bspwm/lemonbar setup:
+Example config for a `bspwm`/`lemonbar` setup:
 
 ```python
 import aiopanel
@@ -77,19 +77,20 @@ widgets = {
     'bspwm': [aiopanel.BspwmWidget(bspwm_template, ctx=bspwm_ctx)],
     'date': [aiopanel.DateTimeWidget('%b %-d %H:%M', update=2)]
 }
+
 ```
 
 ## Writing a widget
 
 A widget is expected to have two async methods on it:
 
-update(), returning a str representing the desired output of the widget. This
-is called whenever watch() asks for an update.
+`update()`, returning a str representing the desired output of the widget. This
+is called whenever `watch()` asks for an update.
 
-watch(request_update), returning nothing. This runs in an infinite loop
-awaiting a given update condition, then calling request_update().
+`watch(request_update)`, returning nothing. This runs in an infinite loop
+awaiting a given update condition, then calling `request_update()`.
 
 #### Note:
 
-It generally makes more sense to call request_update() before waiting,
+It generally makes more sense to call `request_update()` before waiting,
 so that the initial loading of the widget happens immediately.
