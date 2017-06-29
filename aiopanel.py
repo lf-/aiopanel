@@ -239,7 +239,7 @@ class Panel:
         Parameters:
         widgets -- position: list of widgets structure
         out_fmt -- jinja2 template for output. Widget values are passed in as
-                   {position: joined_widgets}
+                   {widgets_key: joined_widgets}
         out_adapter -- PanelAdapter to output to
         """
         self._widgets = widgets
@@ -323,7 +323,7 @@ def main(args: argparse.Namespace) -> None:
 
 
 def _parse_args(argv: List[str]) -> argparse.Namespace:
-    default_config = CONFIG_DIR / f'{APP_NAME}.py'
+    default_config = CONFIG_DIR / f'config.py'
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', '-c',
                         help='Config file to use',
