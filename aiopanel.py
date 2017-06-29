@@ -5,6 +5,7 @@ from asyncio.subprocess import DEVNULL, PIPE
 import datetime
 import logging
 from pathlib import Path
+import sys
 from typing import Any, Awaitable, Callable, Container, Dict, List, NamedTuple
 
 from gi.repository import GLib
@@ -326,7 +327,7 @@ def main(args: argparse.Namespace) -> None:
     start(cfg)
 
 
-def _parse_args(argv: List[str]) -> argparse.Namespace:
+def _parse_args(argv: List[str] = sys.argv[1:]) -> argparse.Namespace:
     default_config = CONFIG_DIR / f'config.py'
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', '-c',
@@ -336,10 +337,13 @@ def _parse_args(argv: List[str]) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-if __name__ == '__main__':
-    import sys
+def entry_point() -> None:
     try:
-        main(_parse_args(sys.argv[1:]))
+        main(_parse_args())
     except Exception as e:
         log.exception('Got exception while running panel')
         raise
+
+
+if __name__ == '__main__':
+    entry_point()
