@@ -5,7 +5,7 @@ from asyncio.subprocess import DEVNULL, PIPE
 import datetime
 import logging
 from pathlib import Path
-from typing import Any, Callable, Container, Dict, List, NamedTuple
+from typing import Any, Awaitable, Callable, Container, Dict, List, NamedTuple
 
 from gi.repository import GLib
 import gbulb
@@ -15,7 +15,7 @@ try:
     import aiobspwm
 except ImportError:
     # just raise if bspwm features are used
-    log.info('aiobspwm not found, bspwm features will be unavailable')
+    pass
 
 
 APP_NAME = 'aiopanel'
@@ -66,6 +66,9 @@ class UniqueQueue(asyncio.Queue):
             await self.put(item)
 
 
+RequestUpdate = Callable[[], Awaitable[None]]
+
+
 class Widget(metaclass=abc.ABCMeta):
     """
     A text-based widget that can be placed on the panel
@@ -77,7 +80,7 @@ class Widget(metaclass=abc.ABCMeta):
         """
 
     @abc.abstractmethod
-    async def watch(self, request_update) -> None:
+    async def watch(self, request_update: RequestUpdate) -> None:
         """
         Run in a loop waiting on whatever condition, then call request_update
         when an update is desired.
@@ -105,7 +108,7 @@ class StaticWidget(Widget):
     async def update(self) -> str:
         return self._value
 
-    async def watch(self, request_update) -> None:
+    async def watch(self, request_update: RequestUpdate) -> None:
         # do nothing because this widget never changes
         await request_update()
 
@@ -128,7 +131,7 @@ class DateTimeWidget(Widget):
         return datetime.datetime.strftime(datetime.datetime.now(),
                                           self._format)
 
-    async def watch(self, request_update) -> None:
+    async def watch(self, request_update: RequestUpdate) -> None:
         while True:
             await request_update()
             await asyncio.sleep(self._update)
@@ -175,7 +178,7 @@ class BspwmWidget(Widget):
             asyncio.ensure_future(self._wm.run())
         return self.format(self._wm)
 
-    async def watch(self, request_update: Callable[[], None]) -> None:
+    async def watch(self, request_update: RequestUpdate) -> None:
         self._updated = asyncio.Event()
         while True:
             await request_update()
@@ -187,7 +190,8 @@ class PanelAdapter(metaclass=abc.ABCMeta):
     """
     Make the panel actually display somewhere
     """
-    async def write(self, panel_value: str):
+    @abc.abstractmethod
+    async def write(self, panel_value: str) -> None:
         """
         Write the specified value to the panel
 
