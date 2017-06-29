@@ -238,13 +238,13 @@ class Panel:
         """
         Parameters:
         widgets -- position: list of widgets structure
-        out_fmt -- formatting string in str.format syntax. Keys of `widgets`
-                   parameter are passed as {position: joined_widgets}
+        out_fmt -- jinja2 template for output. Widget values are passed in as
+                   {position: joined_widgets}
         out_adapter -- PanelAdapter to output to
         """
         self._widgets = widgets
         self._widget_state: Dict[Widget, str] = {}
-        self._out_fmt = out_fmt
+        self._out_fmt = jinja2.Template(out_fmt, autoescape=False)
         self._adapter = out_adapter
         self._update_queue = UniqueQueue()
 
@@ -261,7 +261,7 @@ class Panel:
         out = {}
         for (pos, widgets) in self._widgets.items():
             out[pos] = ''.join(self._widget_state.get(w, '') for w in widgets)
-        return self._out_fmt.format(**out)
+        return self._out_fmt.render(out)
 
     def _start_widget(self, widget: Widget):
         """
