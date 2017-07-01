@@ -3,14 +3,17 @@ import argparse
 import asyncio
 from asyncio.subprocess import DEVNULL, PIPE
 import datetime
+import enum
 import logging
 from pathlib import Path
 import sys
-from typing import Any, Awaitable, Callable, Container, Dict, List, NamedTuple
+from typing import Any, Awaitable, Callable, Container, Dict, List, \
+                   NamedTuple, Tuple
 
 from gi.repository import GLib
 import gbulb
 import jinja2
+import pydbus
 
 try:
     import aiobspwm
@@ -51,6 +54,8 @@ else:
     hnd = logging.FileHandler(LOG_PATH)
     hnd.setFormatter(fmt)
     log.addHandler(hnd)
+
+sys_bus = pydbus.SystemBus()
 
 
 class UniqueQueue(asyncio.Queue):
@@ -184,6 +189,115 @@ class BspwmWidget(Widget):
         while True:
             await request_update()
             await self._updated.wait()
+            self._updated.clear()
+
+
+class DBusPropertyChangeWatcher:
+    """
+    Object that keeps its properties up to date using PropertyChanged signals
+    """
+    def __init__(self, bus_name: str, object_path: str, iface: str,
+                 hook: Callable[[], None] = lambda: None) -> None:
+        """
+        Parameters:
+        bus_name -- name of the service to use on the bus
+        object_path -- path to the object which is being watched
+        iface -- interface on that object to watch the properties of
+
+        Optional Parameters:
+        hook -- hook function to call on all changes
+        """
+        bus_obj = sys_bus.get(bus_name, object_path)
+        self._state = bus_obj.GetAll(iface)
+        sys_bus.subscribe(sender=bus_name,
+                          iface='org.freedesktop.DBus.Properties',
+                          object=object_path,
+                          signal_fired=self.on_change)
+        self._hook = hook
+
+    def on_change(self, sender: str, obj: Any, iface: str, signal: str,
+                  params: Tuple[str, Dict]) -> None:
+        prop_change_iface, prop_change_args, *rest = params
+        log.debug('Prop change %s', prop_change_args)
+        self._state.update(prop_change_args)
+        self._hook()
+
+    def __dir__(self) -> List[str]:
+        return set(self._state.keys()) | set(super().__dir__())
+
+    def __getattr__(self, name: str) -> Any:
+        try:
+            return self._state[name]
+        except KeyError:
+            raise AttributeError(f'Could not find the property {name!r}')
+
+
+class UPowerState(enum.IntEnum):
+    UNKNOWN = 0
+    CHARGING = 1
+    DISCHARGING = 2
+    EMPTY = 3
+    FULLY_CHARGED = 4
+    PENDING_CHARGE = 5
+    PENDING_DISCHARGE = 6
+
+
+class UPowerDeviceType(enum.IntEnum):
+    UNKNOWN = 0
+    LINE_POWER = 1
+    BATTERY = 2
+    UPS = 3
+    MONITOR = 4
+    MOUSE = 5
+    KEYBOARD = 6
+    PDA = 7
+    PHONE = 8
+
+
+class UPowerWidget(Widget):
+    def __init__(self, fmt: str, device: str = 'DisplayDevice',
+                 ctx: Any = None) -> None:
+        """
+        Parameters:
+        fmt -- template string. Context:
+               - device -- autoupdated object with the properties of the
+                           DBus interface org.freedesktop.UPower.Device
+               - State -- enum containing the meanings of the State
+                          property
+               - DeviceType -- enum containing the meanings of the Type
+                               property
+               - ctx -- custom context from the ctx argument of
+                        this constructor
+        device -- device name
+
+        Optional Parameters:
+        ctx -- context object passed verbatim to the template
+        """
+        self.up_dev = DBusPropertyChangeWatcher(
+            bus_name='org.freedesktop.UPower',
+            object_path=f'/org/freedesktop/UPower/devices/{device}',
+            iface='org.freedesktop.UPower.Device',
+            hook=self.on_change)
+        self._template = jinja2.Template(fmt)
+        self._ctx = ctx
+        self._updated = None
+
+    def on_change(self):
+        if self._updated:
+            self._updated.set()
+
+    async def update(self) -> str:
+        return self._template.render(device=self.up_dev,
+                                     State=UPowerState,
+                                     DeviceType=UPowerDeviceType,
+                                     ctx=self._ctx)
+
+    async def watch(self, request_update: RequestUpdate) -> None:
+        self._updated = asyncio.Event()
+        while True:
+            await request_update()
+            await self._updated.wait()
+            log.debug('UPower update')
             self._updated.clear()
 
 
