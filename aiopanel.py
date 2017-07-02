@@ -255,6 +255,11 @@ class UPowerDeviceType(enum.IntEnum):
 
 
 class UPowerWidget(Widget):
+    """
+    A widget for battery monitoring.
+
+    Exposes the entire set of UPower information for a given device.
+    """
     def __init__(self, fmt: str, device: str = 'DisplayDevice',
                  ctx: Any = None) -> None:
         """
