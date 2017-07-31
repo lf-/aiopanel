@@ -2,6 +2,8 @@ import abc
 import argparse
 import asyncio
 from asyncio.subprocess import DEVNULL, PIPE
+from collections import defaultdict
+import contextlib
 import datetime
 import enum
 import logging
@@ -260,6 +262,8 @@ class UPowerWidget(Widget):
 
     Exposes the entire set of UPower information for a given device.
     """
+    log_level = 'INFO'
+
     def __init__(self, fmt: str, device: str = 'DisplayDevice',
                  ctx: Any = None) -> None:
         """
@@ -283,7 +287,7 @@ class UPowerWidget(Widget):
             object_path=f'/org/freedesktop/UPower/devices/{device}',
             iface='org.freedesktop.UPower.Device',
             hook=self.on_change)
-        self._template = jinja2.Template(fmt)
+        self._template = jinja2.Template(fmt, autoescape=False)
         self._ctx = ctx
         self._updated = None
 
@@ -303,6 +307,87 @@ class UPowerWidget(Widget):
             await request_update()
             await self._updated.wait()
             log.debug('UPower update')
+            self._updated.clear()
+
+
+class ServiceContainer(defaultdict):
+    def __init__(self, from_dict: Dict = {}):
+        super().__init__(dict, from_dict)
+
+    def filter(self, prop: str, value: Any) -> Dict[str, Any]:
+        return ServiceContainer({k: v for (k, v) in self.items() \
+                                 if v.get(prop) == value})
+
+
+class ConnmanServiceWatcher(ServiceContainer):
+    """
+    Object that keeps a list of connman services up to date using signals
+    """
+    def __init__(self, hook: Callable[[], None] = lambda: None,
+                 **kwargs) -> None:
+        """
+        Optional Parameters:
+        hook -- hook function to call on all changes
+        """
+        super().__init__()
+        self.reload()
+        sys_bus.subscribe(sender='net.connman',
+                          iface='net.connman.Manager',
+                          object='/',
+                          signal='ServicesChanged',
+                          signal_fired=self._on_change)
+        sys_bus.subscribe(sender='net.connman',
+                          iface='net.connman.Service',
+                          signal='PropertyChanged',
+                          signal_fired=self._on_change)
+        self._hook = hook
+
+    def reload(self):
+        super().clear()
+        bus_obj = sys_bus.get('net.connman', '/')
+        services = bus_obj.GetServices()
+        for svc in services:
+            super().__setitem__(svc[0], svc[1])
+
+
+    def _on_change(self, sender: str, obj: str, iface: str, signal: str,
+                   params: Tuple[str, Dict]) -> None:
+        if signal == 'ServicesChanged':
+            updates, deletes = params
+            for update in updates:
+                log.debug('Service update %s %s', update[0], update[1])
+                super().__getitem__(update[0]).update(update[1])
+
+            for delete in deletes:
+                log.debug('Service delete %s', delete)
+                with contextlib.suppress(KeyError):
+                    super().__delitem__(delete)
+        elif signal == 'PropertyChanged':
+            name, val = params
+            log.debug('Service %s %r = %r', obj, name, val)
+            self.__getitem__(obj)[name] = val
+        self._hook()
+
+
+class ConnmanWidget(Widget):
+    def __init__(self, fmt: str, ctx: Any = None) -> None:
+        self._services = ConnmanServiceWatcher(hook=self._on_change)
+        self._template = jinja2.Template(fmt, autoescape=False)
+        self._ctx = ctx
+        self._updated = None
+
+    def _on_change(self) -> None:
+        if self._updated:
+            self._updated.set()
+
+    async def update(self) -> str:
+        return self._template.render(services=self._services, ctx=self._ctx)
+
+    async def watch(self, request_update: RequestUpdate) -> None:
+        self._updated = asyncio.Event()
+        while True:
+            await request_update()
+            await self._updated.wait()
             self._updated.clear()
 
 
