@@ -9,6 +9,7 @@ import enum
 import logging
 from pathlib import Path
 import sys
+import threading
 from typing import Any, Awaitable, Callable, Container, Dict, List, \
                    NamedTuple, Tuple
 
@@ -21,6 +22,12 @@ try:
     import aiobspwm
 except ImportError:
     # just raise if bspwm features are used
+    pass
+
+try:
+    import pulsectl
+except ImportError:
+    # required for optional pulseaudio widget
     pass
 
 
@@ -92,6 +99,11 @@ class Widget(metaclass=abc.ABCMeta):
         """
         Run in a loop waiting on whatever condition, then call request_update
         when an update is desired.
+
+        This is guaranteed to be called before update() is first called.
+        This guarantee means that initialization that cannot be done in
+        __init__ because there is no event loop can be done
+        before the while loop here.
 
         Parameters:
         request_update -- *async* callable that requests up to the panel to
@@ -385,6 +397,148 @@ class ConnmanWidget(Widget):
 
     async def watch(self, request_update: RequestUpdate) -> None:
         self._updated = asyncio.Event()
+        while True:
+            await request_update()
+            await self._updated.wait()
+            self._updated.clear()
+
+
+class Event_ts(asyncio.Event):
+    """
+    A thread safe version of the asyncio Event
+
+    NOTE: clear() is not thread safe
+
+    Taken from https://stackoverflow.com/a/33006667
+    """
+    def set(self):
+        # XXX: uses undocumented internal attribute, _loop, of Event
+        self._loop.call_soon_threadsafe(super().set)
+
+
+class PulseStateWatcher:
+    """
+    A class to keep track of pulseaudio state.
+
+    Usage:
+    >>> psw = PulseStateWatcher()
+    >>> psw.run()
+    """
+    default_sink: int
+    volume: float
+    mute: bool
+    done_init: Event_ts
+
+    def __init__(self,
+                 done_init: Event_ts = None,
+                 update_hook: Callable[[], None] = lambda: None
+                ):
+        """
+        Keyword parameters:
+        done_init -- event set when initialization is done
+        update_hook -- called whenever there is a (potential) change in
+                       Pulse state
+        """
+        self.pulse = pulsectl.Pulse(__name__)
+        self._update_hook = update_hook
+        self.done_init = done_init
+
+    def _init(self):
+        self._reload_default_sink()
+        self._reload_volume()
+
+    def __enter__(self):
+        self.pulse.__enter__()
+        self._init()
+        return self
+
+    def __exit__(self, *args):
+        self.pulse.__exit__(None, None, None)
+
+    def _event_cb(self, evt):
+        # we can't actually do anything with events here since the
+        # pulsectl loop is still running
+        # print(evt.t, evt.index, evt.facility)
+        self.prev_evt = evt
+        raise pulsectl.PulseLoopStop()
+
+    def _find_default_sink(self):
+        default_name = self.pulse.server_info().default_sink_name
+        sinks = self.pulse.sink_list()
+        sink = next((x for x in sinks if x.name == default_name), None)
+        return sink.index
+
+    def _reload_default_sink(self):
+        self.default_sink = self._find_default_sink()
+
+    def _reload_volume(self):
+        sink = self.pulse.sink_info(self.default_sink)
+        self.volume = sink.volume.value_flat
+        self.mute = sink.mute
+
+    def _handle_event(self, evt):
+        if evt.facility == 'server':
+            # might be a default sink change, reload that
+            prev_default = self.default_sink
+            self._reload_default_sink()
+            if self.default_sink != prev_default:
+                self._reload_volume()
+        elif evt.facility == 'sink':
+            # might be a volume change, reload volume
+            self._reload_volume()
+        log.debug(
+            'Volume of sink %s: %s',
+            self.default_sink,
+            round(self.volume * 100)
+        )
+
+    def run(self):
+        """
+        Run an event loop and keep the state on this class updated
+        """
+        with self:
+            if self.done_init:
+                self.done_init.set()
+            while True:
+                self.pulse.event_mask_set('sink', 'server')
+                self.pulse.event_callback_set(self._event_cb)
+
+                self.pulse.event_listen()  # blocks until event received
+                self._handle_event(self.prev_evt)
+                self._update_hook()
+
+
+class PulseAudioWidget(Widget):
+    """
+    Widget to display the PulseAudio volume
+    """
+    def __init__(self, fmt: str, ctx: Any = None):
+        """
+        Parameters:
+        fmt -- jinja2 template to render as output
+               Context:
+               - state: PulseStateWatcher of the current state
+               - ctx: context parameter as passed to constructor
+        ctx -- passed directly to template rendering
+        """
+        self._template = jinja2.Template(fmt, autoescape=False)
+        self._ctx = ctx
+
+    def _on_change(self):
+        self._updated.set()
+
+    async def update(self):
+        return self._template.render(state=self._state, ctx=self._ctx)
+
+    async def watch(self, request_update: RequestUpdate):
+        self._updated = Event_ts()
+        watcher_done_init = Event_ts()
+        self._state = PulseStateWatcher(
+            done_init=watcher_done_init,
+            update_hook=self._on_change
+        )
+        threading.Thread(target=self._state.run, daemon=True).start()
+        await watcher_done_init.wait()
         while True:
             await request_update()
             await self._updated.wait()
