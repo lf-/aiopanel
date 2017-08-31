@@ -4,12 +4,12 @@ import asyncio
 from asyncio.subprocess import DEVNULL, PIPE
 from collections import defaultdict
 import contextlib
-import datetime
 import enum
 import logging
 from pathlib import Path
 import sys
 import threading
+import time
 from typing import Any, Awaitable, Callable, Container, Dict, List, \
                    NamedTuple, Tuple
 
@@ -148,8 +148,8 @@ class DateTimeWidget(Widget):
         self._update = update
 
     async def update(self) -> str:
-        return datetime.datetime.strftime(datetime.datetime.now(),
-                                          self._format)
+        time.tzset()
+        return time.strftime(self._format)
 
     async def watch(self, request_update: RequestUpdate) -> None:
         while True:
