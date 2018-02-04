@@ -11,7 +11,7 @@ import sys
 import threading
 import time
 from typing import Any, Awaitable, Callable, Container, Dict, List, \
-                   NamedTuple, Tuple
+                   NamedTuple, Optional, Tuple
 
 from gi.repository import GLib
 import gbulb
@@ -230,14 +230,14 @@ class DBusPropertyChangeWatcher:
         self._hook = hook
 
     def on_change(self, sender: str, obj: Any, iface: str, signal: str,
-                  params: Tuple[str, Dict]) -> None:
+                  params: Tuple) -> None:
         prop_change_iface, prop_change_args, *rest = params
         log.debug('Prop change %s', prop_change_args)
         self._state.update(prop_change_args)
         self._hook()
 
     def __dir__(self) -> List[str]:
-        return set(self._state.keys()) | set(super().__dir__())
+        return list(set(self._state.keys()) | set(super().__dir__()))
 
     def __getattr__(self, name: str) -> Any:
         try:
@@ -275,6 +275,7 @@ class UPowerWidget(Widget):
     Exposes the entire set of UPower information for a given device.
     """
     log_level = 'INFO'
+    _updated: Optional[asyncio.Event]
 
     def __init__(self, fmt: str, device: str = 'DisplayDevice',
                  ctx: Any = None) -> None:
@@ -323,7 +324,7 @@ class UPowerWidget(Widget):
 
 
 class ServiceContainer(defaultdict):
-    def __init__(self, from_dict: Dict = {}):
+    def __init__(self, from_dict: Dict = {}) -> None:
         super().__init__(dict, from_dict)
 
     def filter(self, prop: str, value: Any) -> Dict[str, Any]:
@@ -354,7 +355,7 @@ class ConnmanServiceWatcher(ServiceContainer):
                           signal_fired=self._on_change)
         self._hook = hook
 
-    def reload(self):
+    def reload(self) -> None:
         super().clear()
         bus_obj = sys_bus.get('net.connman', '/')
         services = bus_obj.GetServices()
@@ -382,7 +383,24 @@ class ConnmanServiceWatcher(ServiceContainer):
 
 
 class ConnmanWidget(Widget):
+    """
+    Widget to show state of Connman connections
+    """
+    _updated: Optional[asyncio.Event]
     def __init__(self, fmt: str, ctx: Any = None) -> None:
+        """
+        Parameters:
+        fmt -- jinja2 template string to render
+               Context:
+               - services: ConnmanServiceWatcher instance containing Connman
+                           services on the system in a ServiceContainer
+                           (extended dict with easy filtering) keyed by
+                           service name
+               - ctx: context object from ctx parameter
+
+        Optional parameters:
+        ctx -- context object, passed directly to template
+        """
         self._services = ConnmanServiceWatcher(hook=self._on_change)
         self._template = jinja2.Template(fmt, autoescape=False)
         self._ctx = ctx
@@ -432,7 +450,7 @@ class PulseStateWatcher:
     def __init__(self,
                  done_init: Event_ts = None,
                  update_hook: Callable[[], None] = lambda: None
-                ):
+                ) -> None:
         """
         Keyword parameters:
         done_init -- event set when initialization is done
@@ -512,7 +530,7 @@ class PulseAudioWidget(Widget):
     """
     Widget to display the PulseAudio volume
     """
-    def __init__(self, fmt: str, ctx: Any = None):
+    def __init__(self, fmt: str, ctx: Any = None) -> None:
         """
         Parameters:
         fmt -- jinja2 template to render as output
@@ -553,7 +571,7 @@ class SubprocessWidget(Widget):
     def __init__(self,
                  cmd: List[str],
                  fmt: str = "{{ line|trim }}",
-                 ctx: Any = None):
+                 ctx: Any = None) -> None:
         """
         Parameters:
         cmd -- [exe_location, arguments...] of process to execute
