@@ -545,6 +545,45 @@ class PulseAudioWidget(Widget):
             self._updated.clear()
 
 
+class SubprocessWidget(Widget):
+    """
+    A widget that takes lines on stdin and displays them on the panel.
+    This is ideal for xtitle.
+    """
+    def __init__(self,
+                 cmd: List[str],
+                 fmt: str = "{{ line|trim }}",
+                 ctx: Any = None):
+        """
+        Parameters:
+        cmd -- [exe_location, arguments...] of process to execute
+
+        Optional parameters:
+        fmt -- jinja2 template to render as output
+               Context:
+               - line: latest line from subprocess stdout
+               - ctx: provided context parameter
+        ctx -- passed directly to template rendering
+        """
+        self._cmd = cmd
+        self._template = jinja2.Template(fmt, autoescape=False)
+        self._ctx = ctx
+        self._last_line = ''
+
+    async def update(self):
+        return self._template.render(line=self._last_line, ctx=self._ctx)
+
+    async def watch(self, request_update: RequestUpdate):
+        proc = await asyncio.create_subprocess_exec(
+            *self._cmd,
+            stdout=PIPE,
+            stderr=DEVNULL
+        )
+        while True:
+            await request_update()
+            self._last_line = (await proc.stdout.readline()).decode()
+
+
 class PanelAdapter(metaclass=abc.ABCMeta):
     """
     Make the panel actually display somewhere
