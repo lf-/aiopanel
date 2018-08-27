@@ -13,8 +13,8 @@ import time
 from typing import Any, Awaitable, Callable, Container, Dict, List, \
                    NamedTuple, Optional, Tuple
 
-from gi.repository import GLib
-import gbulb
+from gi.repository import GLib  # type: ignore
+import gbulb  # type: ignore
 import jinja2
 import pydbus
 
@@ -161,7 +161,7 @@ class BspwmWidget(Widget):
     """
     A widget for displaying bspwm status based on aiobspwm.
     """
-    def __init__(self, template: str, sock: str = None,
+    def __init__(self, template: str, sock: Optional[str] = None,
                  ctx: Dict[str, Any] = {}) -> None:
         """
         Parameters:
@@ -445,10 +445,10 @@ class PulseStateWatcher:
     default_sink: int
     volume: float
     mute: bool
-    done_init: Event_ts
+    done_init: Optional[Event_ts]
 
     def __init__(self,
-                 done_init: Event_ts = None,
+                 done_init: Optional[Event_ts] = None,
                  update_hook: Callable[[], None] = lambda: None
                 ) -> None:
         """
@@ -597,6 +597,7 @@ class SubprocessWidget(Widget):
             stdout=PIPE,
             stderr=DEVNULL
         )
+        assert proc.stdout
         while True:
             await request_update()
             self._last_line = (await proc.stdout.readline()).decode()
@@ -626,18 +627,30 @@ class SubprocessAdapter(PanelAdapter):
         Parameters:
         proc -- [exe_location, arguments...] of process to execute
         """
-        self._process_coro = asyncio.create_subprocess_exec(
-                *proc,
+        self._proc_args = proc
+
+    def _create_proc(self) -> None:
+        return asyncio.create_subprocess_exec(
+                *self._proc_args,
                 stdin=PIPE,
                 stdout=DEVNULL,
                 stderr=DEVNULL
         )
 
-    async def write(self, panel_value):
-        if not hasattr(self, '_process'):
-            self._process = await self._process_coro
-        self._process.stdin.write((panel_value + '\n').encode('utf-8'))
-        await self._process.stdin.drain()
+    async def write(self, panel_value: str) -> None:
+        if not hasattr(self, '_process'):# or self._process.returncode is not None:
+            log.info('Creating panel subprocess')
+            self._process = await self._create_proc()
+        try:
+            self._process.stdin.write((panel_value + '\n').encode('utf-8'))
+            await self._process.stdin.drain()
+        except (GLib.GError, ConnectionResetError):
+            log.exception('Failed to write to subprocess adapter')
+            self._process.stdin.close()
+            await self._process.wait()
+            # this stops a GLib.GError: g-io-channel-error-quark: Bad file descriptor (8)
+            # replacing the variable should be exactly the same thing but it isn't
+            del self._process
 
 
 class StdoutAdapter(PanelAdapter):
