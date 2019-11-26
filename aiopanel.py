@@ -211,7 +211,10 @@ class BspwmWidget(Widget):
             self._wm = aiobspwm.WM(self._sock,
                     evt_hook=lambda ln: self._updated.set())
             await self._wm.start()
-            asyncio.ensure_future(self._wm.run())
+
+            # store this in the object to avoid it getting GC'd
+            self._wm_task = asyncio.create_task(self._wm.run())
+
             self._wm_initialized.set()
         await self._wm_initialized.wait()
         return self.format(self._wm)
@@ -726,26 +729,24 @@ class Panel:
             out[pos] = ''.join(self._widget_state.get(w, '') for w in widgets)
         return self._out_fmt.render(out)
 
-    def _start_widget(self, widget: Widget):
+    def _start_widget(self, widget: Widget) -> asyncio.Task:
         """
         Starts a widget's watch routine
 
         Parameters:
         widget -- widget to start up
         """
-        async def update_widget(widget: Widget) -> None:
-            self._widget_state[widget] = await widget.update()
-            self._need_redraw.set()
-
+        log.debug('Starting %r', widget)
         async def request_update() -> None:
             # log.debug('widget %s requested update', widget)
-            asyncio.ensure_future(update_widget(widget))
-        asyncio.ensure_future(widget.watch(request_update))
+            self._widget_state[widget] = await widget.update()
+            self._need_redraw.set()
+        return asyncio.create_task(widget.watch(request_update))
 
     async def _init_widgets(self) -> None:
-        for (pos, widgets) in self._widgets.items():
-            for widget in widgets:
-                self._start_widget(widget)
+        for widget_list in self._widgets.values():
+            print(widget_list)
+            self._widget_tasks = [self._start_widget(w) for w in widget_list]
         log.info('Widgets initialized')
 
     async def run(self) -> None:
@@ -772,7 +773,7 @@ def start(cfg: dict) -> None:
     gbulb.install(gtk=False)
     loop = asyncio.get_event_loop()
     panel = Panel(cfg['widgets'], cfg['out_fmt'], cfg['out_adapter'])
-    asyncio.ensure_future(panel.run())
+    loop.create_task(panel.run())
     loop.run_forever()
 
 
