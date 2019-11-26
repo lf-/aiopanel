@@ -76,14 +76,26 @@ sys_bus = pydbus.SystemBus()
 RequestUpdate = Callable[[], Awaitable[None]]
 
 
-class Widget(metaclass=abc.ABCMeta):
+class LogMixin:
+    """
+    A class to expose a .log property on subclasses which logs to a separate
+    stream from the rest of the program
+    """
+
+    @property
+    def log(self) -> logging.Logger:
+        logger = log.getChild(self.__class__.__name__)
+        log_level = getattr(self, 'log_level', None)
+        if log_level is not None:
+            logger.setLevel(log_level)
+        return logger
+
+
+class Widget(LogMixin, metaclass=abc.ABCMeta):
     """
     A text-based widget that can be placed on the panel
     """
     log_level = 'INFO'
-    def __init__(self):
-        self.log = log.getChild(type(self).__name__)
-        self.log.setLevel(self.log_level)
 
     @abc.abstractmethod
     async def update(self) -> str:
@@ -160,6 +172,8 @@ class BspwmWidget(Widget):
     """
     A widget for displaying bspwm status based on aiobspwm.
     """
+    log_level = 'DEBUG'
+
     def __init__(self, template: str, sock: Optional[str] = None,
                  ctx: Dict[str, Any] = {}) -> None:
         """
@@ -185,6 +199,8 @@ class BspwmWidget(Widget):
         """
         Take a WM object and return a formatted-up version
         """
+        if wm.focused_monitor == None:
+            import pdb; pdb.set_trace()
         return self._template.render(wm=wm, ctx=self._ctx)
 
     async def update(self) -> str:
@@ -196,17 +212,22 @@ class BspwmWidget(Widget):
                     evt_hook=lambda ln: self._updated.set())
             await self._wm.start()
             asyncio.ensure_future(self._wm.run())
+            self._wm_initialized.set()
+        await self._wm_initialized.wait()
         return self.format(self._wm)
 
     async def watch(self, request_update: RequestUpdate) -> None:
         self._updated = asyncio.Event()
+        # this ensures that we don't try to format output when we don't have
+        # the wm object initialized
+        self._wm_initialized = asyncio.Event()
         while True:
             await request_update()
             await self._updated.wait()
             self._updated.clear()
 
 
-class DBusPropertyChangeWatcher:
+class DBusPropertyChangeWatcher(LogMixin):
     """
     Object that keeps its properties up to date using PropertyChanged signals
     """
@@ -233,7 +254,7 @@ class DBusPropertyChangeWatcher:
     def on_change(self, sender: str, obj: Any, iface: str, signal: str,
                   params: Tuple) -> None:
         prop_change_iface, prop_change_args, *rest = params
-        log.debug('Prop change %s', prop_change_args)
+        self.log.debug('Prop change %s', prop_change_args)
         self._state.update(prop_change_args)
         self._hook()
 
@@ -334,10 +355,12 @@ class ServiceContainer(defaultdict):
                                  if v.get(prop) == value})
 
 
-class ConnmanServiceWatcher(ServiceContainer):
+class ConnmanServiceWatcher(ServiceContainer, LogMixin):
     """
     Object that keeps a list of connman services up to date using signals
     """
+    log_level = 'INFO'
+
     def __init__(self, hook: Callable[[], None] = lambda: None,
                  **kwargs) -> None:
         """
@@ -370,16 +393,16 @@ class ConnmanServiceWatcher(ServiceContainer):
         if signal == 'ServicesChanged':
             updates, deletes = params
             for update in updates:
-                log.debug('Service update %s %s', update[0], update[1])
+                self.log.debug('Service update %s %s', update[0], update[1])
                 super().__getitem__(update[0]).update(update[1])
 
             for delete in deletes:
-                log.debug('Service delete %s', delete)
+                self.log.debug('Service delete %s', delete)
                 with contextlib.suppress(KeyError):
                     super().__delitem__(delete)
         elif signal == 'PropertyChanged':
             name, val = params
-            log.debug('Service %s %r = %r', obj, name, val)
+            self.log.debug('Service %s %r = %r', obj, name, val)
             self.__getitem__(obj)[name] = val
         self._hook()
 
@@ -437,7 +460,7 @@ class Event_ts(asyncio.Event):
         self._loop.call_soon_threadsafe(super().set)
 
 
-class PulseStateWatcher:
+class PulseStateWatcher(LogMixin):
     """
     A class to keep track of pulseaudio state.
 
@@ -507,7 +530,7 @@ class PulseStateWatcher:
         elif evt.facility == 'sink':
             # might be a volume change, reload volume
             self._reload_volume()
-        log.debug(
+        self.log.debug(
             'Volume of sink %s: %s',
             self.default_sink,
             round(self.volume * 100)
