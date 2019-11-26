@@ -51,35 +51,27 @@ if not log.level:
     log.setLevel(DEFAULT_LOG_LEVEL)
 
 fmt = logging.Formatter(
-    '{asctime} {levelname} {filename}:{lineno}: {message}',
+    '{asctime} {levelname} {name}: {message}',
     datefmt='%b %d %H:%M:%S',
     style='{'
 )
+
+if sys.stdout.isatty():
+    log.addHandler(logging.StreamHandler())
+
 # don't add handlers repeatedly when I use autoreload
 for handler in log.handlers:
-    if isinstance(handler, logging.FileHandler):
+    if isinstance(handler, logging.FileHandler) or \
+            isinstance(handler, logging.StreamHandler):
         break
 else:
     hnd = logging.FileHandler(LOG_PATH)
-    hnd.setFormatter(fmt)
     log.addHandler(hnd)
 
+for handler in log.handlers:
+    handler.setFormatter(fmt)
+
 sys_bus = pydbus.SystemBus()
-
-
-class UniqueQueue(asyncio.Queue):
-    _queue: Container[Any]
-
-    async def put_unique(self, item: Any) -> None:
-        """
-        Put an item on the queue, checking if it is already there
-
-        Parameters:
-        item -- item to put on queue
-        """
-        if item not in self._queue:
-            await self.put(item)
-
 
 RequestUpdate = Callable[[], Awaitable[None]]
 
@@ -88,6 +80,11 @@ class Widget(metaclass=abc.ABCMeta):
     """
     A text-based widget that can be placed on the panel
     """
+    log_level = 'INFO'
+    def __init__(self):
+        self.log = log.getChild(type(self).__name__)
+        self.log.setLevel(self.log_level)
+
     @abc.abstractmethod
     async def update(self) -> str:
         """
@@ -123,6 +120,7 @@ class StaticWidget(Widget):
         Parameters:
         value -- value to display
         """
+        super().__init__()
         self._value = value
 
     async def update(self) -> str:
@@ -144,6 +142,7 @@ class DateTimeWidget(Widget):
                Output: 'Jun 23 21:12'
         update -- update interval in seconds
         """
+        super().__init__()
         self._format = fmt
         self._update = update
 
@@ -174,6 +173,7 @@ class BspwmWidget(Widget):
         ctx -- extra context to pass to templating stage (allows for
                parameterisation of the template)
         """
+        super().__init__()
         if 'aiobspwm' not in globals():
             raise ImportError('aiobspwm is required for BspwmWidget, but '
                               'was not found')
@@ -221,6 +221,7 @@ class DBusPropertyChangeWatcher:
         Optional Parameters:
         hook -- hook function to call on all changes
         """
+        super().__init__()
         bus_obj = sys_bus.get(bus_name, object_path)
         self._state = bus_obj.GetAll(iface)
         sys_bus.subscribe(sender=bus_name,
@@ -295,6 +296,7 @@ class UPowerWidget(Widget):
         Optional Parameters:
         ctx -- context object passed verbatim to the template
         """
+        super().__init__()
         self.up_dev = DBusPropertyChangeWatcher(
             bus_name='org.freedesktop.UPower',
             object_path=f'/org/freedesktop/UPower/devices/{device}',
@@ -319,7 +321,7 @@ class UPowerWidget(Widget):
         while True:
             await request_update()
             await self._updated.wait()
-            log.debug('UPower update')
+            self.log.debug('UPower update')
             self._updated.clear()
 
 
@@ -401,6 +403,7 @@ class ConnmanWidget(Widget):
         Optional parameters:
         ctx -- context object, passed directly to template
         """
+        super().__init__()
         self._services = ConnmanServiceWatcher(hook=self._on_change)
         self._template = jinja2.Template(fmt, autoescape=False)
         self._ctx = ctx
@@ -539,6 +542,7 @@ class PulseAudioWidget(Widget):
                - ctx: context parameter as passed to constructor
         ctx -- passed directly to template rendering
         """
+        super().__init__()
         self._template = jinja2.Template(fmt, autoescape=False)
         self._ctx = ctx
 
@@ -583,6 +587,7 @@ class SubprocessWidget(Widget):
                - ctx: provided context parameter
         ctx -- passed directly to template rendering
         """
+        super().__init__()
         self._cmd = cmd
         self._template = jinja2.Template(fmt, autoescape=False)
         self._ctx = ctx
@@ -679,7 +684,9 @@ class Panel:
         self._widget_state: Dict[Widget, str] = {}
         self._out_fmt = jinja2.Template(out_fmt, autoescape=False)
         self._adapter = out_adapter
-        self._update_queue = UniqueQueue()
+        # NOTE: please don't run widgets on separate threads; use IPC
+        #       to run the widget on the main thread and exchange data
+        self._need_redraw = asyncio.Event()
 
     async def redraw(self) -> None:
         await self._adapter.write(self._draw())
@@ -703,9 +710,13 @@ class Panel:
         Parameters:
         widget -- widget to start up
         """
+        async def update_widget(widget: Widget) -> None:
+            self._widget_state[widget] = await widget.update()
+            self._need_redraw.set()
+
         async def request_update() -> None:
             # log.debug('widget %s requested update', widget)
-            await self._update_queue.put_unique(widget)
+            asyncio.ensure_future(update_widget(widget))
         asyncio.ensure_future(widget.watch(request_update))
 
     async def _init_widgets(self) -> None:
@@ -716,11 +727,15 @@ class Panel:
 
     async def run(self) -> None:
         await self._init_widgets()
+
         while True:
-            widget = await self._update_queue.get()
-            # XXX: this is effectively a blocking operation and should
-            #      somehow be concurrent-ised
-            self._widget_state[widget] = await widget.update()
+            # Widgets will request updates, the updates will be executed in
+            # parallel, then the bar will be flagged for redraw at some point
+            # in the future. The purpose of this design is to allow multiple
+            # updates to occur per redraw cycle since updates are cheaper than
+            # redraws (lemonbar is slow!)
+            await self._need_redraw.wait()
+            self._need_redraw.clear()
             await self.redraw()
 
 
