@@ -713,6 +713,7 @@ class Panel:
         # NOTE: please don't run widgets on separate threads; use IPC
         #       to run the widget on the main thread and exchange data
         self._need_redraw = asyncio.Event()
+        self._widget_tasks = []
 
     async def redraw(self) -> None:
         await self._adapter.write(self._draw())
@@ -745,8 +746,8 @@ class Panel:
 
     async def _init_widgets(self) -> None:
         for widget_list in self._widgets.values():
-            print(widget_list)
-            self._widget_tasks = [self._start_widget(w) for w in widget_list]
+            log.debug('initializing %r', widget_list)
+            self._widget_tasks.extend(self._start_widget(w) for w in widget_list)
         log.info('Widgets initialized')
 
     async def run(self) -> None:
