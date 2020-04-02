@@ -200,7 +200,8 @@ class BspwmWidget(Widget):
         Take a WM object and return a formatted-up version
         """
         if wm.focused_monitor == None:
-            import pdb; pdb.set_trace()
+            self.log.error('bspwm context: {}', wm)
+            raise ValueError('focused_monitor is None! This should never happen')
         return self._template.render(wm=wm, ctx=self._ctx)
 
     async def update(self) -> str:

@@ -2,22 +2,15 @@
 
 An `asyncio` text-based panel system.
 
-This is completely WM/bar agnostic. Obviously there are WM specific widgets,
-however their WM specific dependencies are all optional like the widgets
-themselves. As far as bar compatibility, as long as the bar can take lines
-on stdin and display them in the general direction of your eyeballs,
-it is compatible with the default setup.
+## Features
 
-Even if it doesn't work with that setup, it is extremely simple to write
-an adapter for it (requiring all of one single method)
-
-## Goal
-
-Make it as simple as possible to write widgets (I think it is even possible
-to define new ones directly in the config file, but runpy docs make no
-guarantee of this working).
-
-This simplicity is achieved through the use of `asyncio`.
+- WM and bar agnostic. By default, lemonbar-like bars that take lines on stdin
+  and display them are supported, though there is a generic API that can be
+  used to hook the output to anything that takes a string.
+- Uses very little CPU time when running
+- Rich customization through a Python based configuration file
+- Concurrent/asynchronous programming model ensures all widgets are as
+  responsive as possible
 
 ## Requirements
 
