@@ -133,7 +133,9 @@ class BspwmWidget(Widget):
     """
     log_level = 'DEBUG'
 
-    def __init__(self, template: str, sock: Optional[str] = None,
+    def __init__(self,
+                 template: str,
+                 sock: Optional[str] = None,
                  ctx: Dict[str, Any] = {}) -> None:
         """
         Parameters:
@@ -160,7 +162,8 @@ class BspwmWidget(Widget):
         """
         if wm.focused_monitor == None:
             self.log.error('bspwm context: {}', wm)
-            raise ValueError('focused_monitor is None! This should never happen')
+            raise ValueError(
+                'focused_monitor is None! This should never happen')
         return self._template.render(wm=wm, ctx=self._ctx)
 
     async def update(self) -> str:
@@ -169,7 +172,7 @@ class BspwmWidget(Widget):
             # being initialised on config load (and thus __init__)
             self._updated.set()
             self._wm = aiobspwm.WM(self._sock,
-                    evt_hook=lambda ln: self._updated.set())
+                                   evt_hook=lambda ln: self._updated.set())
             await self._wm.start()
 
             # store this in the object to avoid it getting GC'd
@@ -194,7 +197,10 @@ class DBusPropertyChangeWatcher(LogMixin):
     """
     Object that keeps its properties up to date using PropertyChanged signals
     """
-    def __init__(self, bus_name: str, object_path: str, iface: str,
+    def __init__(self,
+                 bus_name: str,
+                 object_path: str,
+                 iface: str,
                  hook: Callable[[], None] = lambda: None) -> None:
         """
         Parameters:
@@ -262,7 +268,9 @@ class UPowerWidget(Widget):
     log_level = 'INFO'
     _updated: Optional[asyncio.Event]
 
-    def __init__(self, fmt: str, device: str = 'DisplayDevice',
+    def __init__(self,
+                 fmt: str,
+                 device: str = 'DisplayDevice',
                  ctx: Any = None) -> None:
         """
         Parameters:
@@ -324,7 +332,8 @@ class ConnmanServiceWatcher(ServiceContainer, LogMixin):
     """
     log_level = 'INFO'
 
-    def __init__(self, hook: Callable[[], None] = lambda: None,
+    def __init__(self,
+                 hook: Callable[[], None] = lambda: None,
                  **kwargs) -> None:
         """
         Optional Parameters:
@@ -350,7 +359,6 @@ class ConnmanServiceWatcher(ServiceContainer, LogMixin):
         for svc in services:
             super().__setitem__(svc[0], svc[1])
 
-
     def _on_change(self, sender: str, obj: str, iface: str, signal: str,
                    params: Tuple[str, Dict]) -> None:
         if signal == 'ServicesChanged':
@@ -375,6 +383,7 @@ class ConnmanWidget(Widget):
     Widget to show state of Connman connections
     """
     _updated: Optional[asyncio.Event]
+
     def __init__(self, fmt: str, ctx: Any = None) -> None:
         """
         Parameters:
@@ -438,8 +447,7 @@ class PulseStateWatcher(LogMixin):
 
     def __init__(self,
                  done_init: Optional[Event_ts] = None,
-                 update_hook: Callable[[], None] = lambda: None
-                ) -> None:
+                 update_hook: Callable[[], None] = lambda: None) -> None:
         """
         Keyword parameters:
         done_init -- event set when initialization is done
@@ -465,12 +473,14 @@ class PulseStateWatcher(LogMixin):
     def _event_cb(self, evt):
         # we can't actually do anything with events here since the
         # pulsectl loop is still running
-        self.log.debug('event: type %r idx %r facility %r', evt.t, evt.index, evt.facility)
+        self.log.debug('event: type %r idx %r facility %r', evt.t, evt.index,
+                       evt.facility)
         self.prev_evt = evt
         raise pulsectl.PulseLoopStop()
 
     def _find_default_sink(self):
-        default_name = self.pulse.server_info().default_sink_name  # type: ignore
+        default_name = self.pulse.server_info(
+        ).default_sink_name  # type: ignore
         sinks = self.pulse.sink_list()
         sink = next((x for x in sinks if x.name == default_name), None)
         if not sink:
@@ -496,11 +506,8 @@ class PulseStateWatcher(LogMixin):
         elif evt.facility == 'sink':
             # might be a volume change, reload volume
             self._reload_volume()
-        self.log.debug(
-            'Volume of sink %s: %s',
-            self.default_sink,
-            round(self.volume * 100)
-        )
+        self.log.debug('Volume of sink %s: %s', self.default_sink,
+                       round(self.volume * 100))
 
     def run(self):
         """
@@ -544,10 +551,8 @@ class PulseAudioWidget(Widget):
     async def watch(self, request_update: RequestUpdate):
         self._updated = Event_ts()
         watcher_done_init = Event_ts()
-        self._state = PulseStateWatcher(
-            done_init=watcher_done_init,
-            update_hook=self._on_change
-        )
+        self._state = PulseStateWatcher(done_init=watcher_done_init,
+                                        update_hook=self._on_change)
         threading.Thread(target=self._state.run, daemon=True).start()
         await watcher_done_init.wait()
         while True:
@@ -586,11 +591,9 @@ class SubprocessWidget(Widget):
         return self._template.render(line=self._last_line, ctx=self._ctx)
 
     async def watch(self, request_update: RequestUpdate):
-        proc = await asyncio.create_subprocess_exec(
-            *self._cmd,
-            stdout=PIPE,
-            stderr=DEVNULL
-        )
+        proc = await asyncio.create_subprocess_exec(*self._cmd,
+                                                    stdout=PIPE,
+                                                    stderr=DEVNULL)
         assert proc.stdout
         while True:
             await request_update()
@@ -624,15 +627,14 @@ class SubprocessAdapter(PanelAdapter):
         self._proc_args = proc
 
     def _create_proc(self) -> Coroutine[Any, Any, asyncio.subprocess.Process]:
-        return asyncio.create_subprocess_exec(
-                *self._proc_args,
-                stdin=PIPE,
-                stdout=DEVNULL,
-                stderr=DEVNULL
-        )
+        return asyncio.create_subprocess_exec(*self._proc_args,
+                                              stdin=PIPE,
+                                              stdout=DEVNULL,
+                                              stderr=DEVNULL)
 
     async def write(self, panel_value: str) -> None:
-        if not hasattr(self, '_process'):# or self._process.returncode is not None:
+        if not hasattr(self,
+                       '_process'):  # or self._process.returncode is not None:
             log.info('Creating panel subprocess')
             self._process = await self._create_proc()
 
@@ -703,16 +705,19 @@ class Panel:
         widget -- widget to start up
         """
         log.debug('Starting %r', widget)
+
         async def request_update() -> None:
             # log.debug('widget %s requested update', widget)
             self._widget_state[widget] = await widget.update()
             self._need_redraw.set()
+
         return asyncio.create_task(widget.watch(request_update))
 
     async def _init_widgets(self) -> None:
         for widget_list in self._widgets.values():
             log.debug('initializing %r', widget_list)
-            self._widget_tasks.extend(self._start_widget(w) for w in widget_list)
+            self._widget_tasks.extend(
+                self._start_widget(w) for w in widget_list)
         log.info('Widgets initialized')
 
     async def run(self) -> None:
@@ -743,11 +748,7 @@ def start(cfg: dict) -> None:
     loop.run_forever()
 
 
-CONFIG_REQUIRED = [
-    'widgets',
-    'out_fmt',
-    'out_adapter'
-]
+CONFIG_REQUIRED = ['widgets', 'out_fmt', 'out_adapter']
 
 
 def main(args: argparse.Namespace) -> None:
@@ -764,7 +765,8 @@ def main(args: argparse.Namespace) -> None:
 def _parse_args(argv: List[str] = sys.argv[1:]) -> argparse.Namespace:
     default_config = CONFIG_DIR / f'config.py'
     parser = argparse.ArgumentParser()
-    parser.add_argument('--config', '-c',
+    parser.add_argument('--config',
+                        '-c',
                         help='Config file to use',
                         type=Path,
                         default=default_config)

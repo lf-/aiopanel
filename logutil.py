@@ -19,6 +19,7 @@ DEFAULT_LOG_LEVEL = logging.INFO
 
 LEVELS = set(logging._levelToName.keys())
 
+
 def init_log_levels_from_env():
     v = os.environ.get(LOG_VAR)
     if not v:
@@ -56,11 +57,9 @@ def make_logger(path: StrPath) -> logging.Logger:
     if not log.level:
         log.setLevel(DEFAULT_LOG_LEVEL)
 
-    fmt = logging.Formatter(
-        '{asctime} {levelname} {name}: {message}',
-        datefmt='%b %d %H:%M:%S',
-        style='{'
-    )
+    fmt = logging.Formatter('{asctime} {levelname} {name}: {message}',
+                            datefmt='%b %d %H:%M:%S',
+                            style='{')
 
     if sys.stdout.isatty():
         log.addHandler(logging.StreamHandler())
@@ -89,7 +88,6 @@ class LogMixin:
     A class to expose a .log property on subclasses which logs to a separate
     stream from the rest of the program
     """
-
     @property
     def log(self) -> logging.Logger:
         logger = get_log().getChild(self.__class__.__name__)
@@ -100,5 +98,3 @@ class LogMixin:
         if log_level is not None:
             logger.setLevel(log_level)
         return logger
-
-
