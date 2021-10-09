@@ -10,13 +10,16 @@ from pathlib import Path
 import sys
 import threading
 import time
-from typing import Any, Awaitable, Callable, Container, Dict, List, \
-                   NamedTuple, Optional, Tuple
+from typing import Any, Awaitable, Callable, Coroutine, Dict, List, \
+                   Optional, Tuple
 
 from gi.repository import GLib  # type: ignore
 import gbulb  # type: ignore
 import jinja2
 import pydbus
+
+import logutil
+from logutil import APP_NAME, DEFAULT_LOG_LEVEL, LogMixin, init_log_levels_from_env
 
 try:
     import aiobspwm
@@ -30,8 +33,6 @@ except ImportError:
     # required for optional pulseaudio widget
     pass
 
-
-APP_NAME = 'aiopanel'
 CACHE_DIR = Path(GLib.get_user_cache_dir()) / APP_NAME
 CONFIG_DIR = Path(GLib.get_user_config_dir()) / APP_NAME
 
@@ -42,53 +43,11 @@ if not CONFIG_DIR.exists():
     CONFIG_DIR.mkdir()
 
 LOG_PATH = str(CACHE_DIR / f'{APP_NAME}.log')
-DEFAULT_LOG_LEVEL = logging.INFO
-
-log = logging.getLogger(APP_NAME)
-
-# don't override settings in our logger put there before we loaded
-if not log.level:
-    log.setLevel(DEFAULT_LOG_LEVEL)
-
-fmt = logging.Formatter(
-    '{asctime} {levelname} {name}: {message}',
-    datefmt='%b %d %H:%M:%S',
-    style='{'
-)
-
-if sys.stdout.isatty():
-    log.addHandler(logging.StreamHandler())
-
-# don't add handlers repeatedly when I use autoreload
-for handler in log.handlers:
-    if isinstance(handler, logging.FileHandler) or \
-            isinstance(handler, logging.StreamHandler):
-        break
-else:
-    hnd = logging.FileHandler(LOG_PATH)
-    log.addHandler(hnd)
-
-for handler in log.handlers:
-    handler.setFormatter(fmt)
+log = logutil.make_logger(LOG_PATH)
 
 sys_bus = pydbus.SystemBus()
 
 RequestUpdate = Callable[[], Awaitable[None]]
-
-
-class LogMixin:
-    """
-    A class to expose a .log property on subclasses which logs to a separate
-    stream from the rest of the program
-    """
-
-    @property
-    def log(self) -> logging.Logger:
-        logger = log.getChild(self.__class__.__name__)
-        log_level = getattr(self, 'log_level', None)
-        if log_level is not None:
-            logger.setLevel(log_level)
-        return logger
 
 
 class Widget(LogMixin, metaclass=abc.ABCMeta):
@@ -461,7 +420,7 @@ class Event_ts(asyncio.Event):
     """
     def set(self):
         # XXX: uses undocumented internal attribute, _loop, of Event
-        self._loop.call_soon_threadsafe(super().set)
+        self._loop.call_soon_threadsafe(super().set)  # type: ignore
 
 
 class PulseStateWatcher(LogMixin):
@@ -506,14 +465,17 @@ class PulseStateWatcher(LogMixin):
     def _event_cb(self, evt):
         # we can't actually do anything with events here since the
         # pulsectl loop is still running
-        # print(evt.t, evt.index, evt.facility)
+        self.log.debug('event: type %r idx %r facility %r', evt.t, evt.index, evt.facility)
         self.prev_evt = evt
         raise pulsectl.PulseLoopStop()
 
     def _find_default_sink(self):
-        default_name = self.pulse.server_info().default_sink_name
+        default_name = self.pulse.server_info().default_sink_name  # type: ignore
         sinks = self.pulse.sink_list()
         sink = next((x for x in sinks if x.name == default_name), None)
+        if not sink:
+            self.log.error('Failed to find default sink')
+            raise ValueError('Failed to find default sink')
         return sink.index
 
     def _reload_default_sink(self):
@@ -661,7 +623,7 @@ class SubprocessAdapter(PanelAdapter):
         """
         self._proc_args = proc
 
-    def _create_proc(self) -> None:
+    def _create_proc(self) -> Coroutine[Any, Any, asyncio.subprocess.Process]:
         return asyncio.create_subprocess_exec(
                 *self._proc_args,
                 stdin=PIPE,
@@ -673,6 +635,8 @@ class SubprocessAdapter(PanelAdapter):
         if not hasattr(self, '_process'):# or self._process.returncode is not None:
             log.info('Creating panel subprocess')
             self._process = await self._create_proc()
+
+        assert self._process.stdin
         try:
             self._process.stdin.write((panel_value + '\n').encode('utf-8'))
             await self._process.stdin.drain()
@@ -793,6 +757,7 @@ def main(args: argparse.Namespace) -> None:
         if req not in cfg:
             raise ValueError(f'Config missing value {req!r}')
     log.setLevel(cfg.get('log_level', DEFAULT_LOG_LEVEL))
+    init_log_levels_from_env()
     start(cfg)
 
 
