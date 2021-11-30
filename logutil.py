@@ -17,7 +17,7 @@ APP_NAME = 'aiopanel'
 LOG_VAR = 'AIOPANEL_LOG'
 DEFAULT_LOG_LEVEL = logging.INFO
 
-LEVELS = set(logging._levelToName.keys())
+LEVELS = set(logging._levelToName.values())
 
 
 def init_log_levels_from_env():
@@ -28,7 +28,6 @@ def init_log_levels_from_env():
 
     def handle_config(c: str):
         item, *rest = c.split('=')
-        print(item, rest)
         if len(rest) == 1:
             # a=b
             lhs = item
@@ -43,16 +42,14 @@ def init_log_levels_from_env():
                 rhs = logging.NOTSET
         else:
             raise ValueError(f'Invalid syntax in {LOG_VAR} item {item:r}')
-        logger = logging.getLogger(lhs if lhs else APP_NAME)
+        print('set', lhs, 'to', rhs)
+        logger = logging.getLogger(lhs if lhs else None)
         logger.setLevel(rhs)
 
     for config in configs:
         handle_config(config)
 
-
-def make_logger(path: StrPath) -> logging.Logger:
-    log = logging.getLogger(APP_NAME)
-
+def init_logger(path: StrPath, log: logging.Logger) -> logging.Logger:
     # don't override settings in our logger put there before we loaded
     if not log.level:
         log.setLevel(DEFAULT_LOG_LEVEL)

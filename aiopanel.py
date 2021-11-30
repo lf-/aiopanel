@@ -43,7 +43,8 @@ if not CONFIG_DIR.exists():
     CONFIG_DIR.mkdir()
 
 LOG_PATH = str(CACHE_DIR / f'{APP_NAME}.log')
-log = logutil.make_logger(LOG_PATH)
+logutil.init_logger(LOG_PATH, logging.getLogger())
+log = logging.getLogger(APP_NAME)
 
 sys_bus = pydbus.SystemBus()
 
@@ -440,9 +441,9 @@ class PulseStateWatcher(LogMixin):
     >>> psw = PulseStateWatcher()
     >>> psw.run()
     """
-    default_sink: int
-    volume: float
-    mute: bool
+    default_sink: Optional[int]
+    volume: Optional[float]
+    mute: Optional[bool]
     done_init: Optional[Event_ts]
 
     def __init__(self,
@@ -479,22 +480,42 @@ class PulseStateWatcher(LogMixin):
         raise pulsectl.PulseLoopStop()
 
     def _find_default_sink(self):
-        default_name = self.pulse.server_info(
-        ).default_sink_name  # type: ignore
-        sinks = self.pulse.sink_list()
-        sink = next((x for x in sinks if x.name == default_name), None)
-        if not sink:
-            self.log.error('Failed to find default sink')
-            raise ValueError('Failed to find default sink')
-        return sink.index
+        for _ in range(3):
+            server_info = self.pulse.server_info()
+            default_name = server_info.default_sink_name  # type: ignore
+            sinks = self.pulse.sink_list()
+            self.log.debug('Finding default sink, server info %r; sinks %r',
+                           server_info, sinks)
+            sink = next((x for x in sinks if x.name == default_name), None)
+            if not sink:
+                self.log.error(
+                    'Failed to find default sink: server info %r; sinks: %r',
+                    server_info, sinks)
+                time.sleep(1)
+                continue
+            return sink.index
+        self.default_sink = None
 
     def _reload_default_sink(self):
+        self.log.debug('Reloading sinks')
         self.default_sink = self._find_default_sink()
 
     def _reload_volume(self):
-        sink = self.pulse.sink_info(self.default_sink)
-        self.volume = sink.volume.value_flat
-        self.mute = sink.mute
+        if not self.default_sink:
+            self._reload_default_sink()
+            if not self.default_sink:
+                return
+
+        try:
+            sink = self.pulse.sink_info(self.default_sink)
+        except pulsectl.PulseIndexError:
+            self.log.exception(
+                'Index error while fetching volume, wrong default sink?')
+            self._reload_default_sink()
+            return
+
+        self.volume = sink.volume.value_flat  # type: ignore
+        self.mute = sink.mute  # type: ignore
 
     def _handle_event(self, evt):
         if evt.facility == 'server':
@@ -503,11 +524,18 @@ class PulseStateWatcher(LogMixin):
             self._reload_default_sink()
             if self.default_sink != prev_default:
                 self._reload_volume()
+        elif evt.facility == 'sink' and evt.t in [
+                pulsectl.PulseEventTypeEnum.new,  # type: ignore
+                pulsectl.PulseEventTypeEnum.remove  # type: ignore
+        ]:
+            # changed sink list; default sink may have changed
+            self._reload_default_sink()
         elif evt.facility == 'sink':
             # might be a volume change, reload volume
             self._reload_volume()
-        self.log.debug('Volume of sink %s: %s', self.default_sink,
-                       round(self.volume * 100))
+        if self.volume:
+            self.log.debug('Volume of sink %s: %s', self.default_sink,
+                           round(self.volume * 100))
 
     def run(self):
         """
@@ -516,6 +544,7 @@ class PulseStateWatcher(LogMixin):
         with self:
             if self.done_init:
                 self.done_init.set()
+            self.log.debug('Starting pulse state watcher')
             while True:
                 self.pulse.event_mask_set('sink', 'server')
                 self.pulse.event_callback_set(self._event_cb)
