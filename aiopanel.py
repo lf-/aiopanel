@@ -499,6 +499,7 @@ class PulseStateWatcher(LogMixin):
     def _reload_default_sink(self):
         self.log.debug('Reloading sinks')
         self.default_sink = self._find_default_sink()
+        self._reload_volume()
 
     def _reload_volume(self):
         if not self.default_sink:
@@ -516,6 +517,7 @@ class PulseStateWatcher(LogMixin):
 
         self.volume = sink.volume.value_flat  # type: ignore
         self.mute = sink.mute  # type: ignore
+        self.proplist = sink.proplist  # type: ignore
 
     def _handle_event(self, evt):
         if evt.facility == 'server':
@@ -532,7 +534,17 @@ class PulseStateWatcher(LogMixin):
             self._reload_default_sink()
         elif evt.facility == 'sink':
             # might be a volume change, reload volume
-            self._reload_volume()
+            #self._reload_volume()
+            # FIXME: for some reason, sometimes pipewire emits a new-sink event
+            # but doesn't immediately change its internal default sink, and
+            # also doesn't emit an event when it actually does change it.
+            #
+            # volume change events don't actually require reloading default
+            # sink, but we do it anyway so the user gets feedback when they
+            # change volume while we are desynched
+            #
+            # we should report that bug to them
+            self._reload_default_sink()
         if self.volume:
             self.log.debug('Volume of sink %s: %s', self.default_sink,
                            round(self.volume * 100))
@@ -643,7 +655,7 @@ class PanelAdapter(metaclass=abc.ABCMeta):
         """
 
 
-class SubprocessAdapter(PanelAdapter):
+class SubprocessAdapter(PanelAdapter, LogMixin):
     """
     A PanelAdapter that sends newline terminated lines to the stdin
     of a process
@@ -664,7 +676,7 @@ class SubprocessAdapter(PanelAdapter):
     async def write(self, panel_value: str) -> None:
         if not hasattr(self,
                        '_process'):  # or self._process.returncode is not None:
-            log.info('Creating panel subprocess')
+            self.log.info('Creating panel subprocess')
             self._process = await self._create_proc()
 
         assert self._process.stdin
@@ -672,7 +684,7 @@ class SubprocessAdapter(PanelAdapter):
             self._process.stdin.write((panel_value + '\n').encode('utf-8'))
             await self._process.stdin.drain()
         except (GLib.GError, ConnectionResetError):
-            log.exception('Failed to write to subprocess adapter')
+            self.log.exception('Failed to write to subprocess adapter')
             self._process.stdin.close()
             await self._process.wait()
             # this stops a GLib.GError: g-io-channel-error-quark: Bad file descriptor (8)
@@ -692,7 +704,7 @@ FormattingPosition = str
 WidgetDict = Dict[FormattingPosition, List[Widget]]
 
 
-class Panel:
+class Panel(LogMixin):
     def __init__(self, widgets: WidgetDict, out_fmt: str,
                  out_adapter: PanelAdapter) -> None:
         """
@@ -733,21 +745,27 @@ class Panel:
         Parameters:
         widget -- widget to start up
         """
-        log.debug('Starting %r', widget)
+        self.log.debug('Starting %r', widget)
 
         async def request_update() -> None:
             # log.debug('widget %s requested update', widget)
             self._widget_state[widget] = await widget.update()
             self._need_redraw.set()
 
-        return asyncio.create_task(widget.watch(request_update))
+        async def catch_wrapper() -> None:
+            try:
+                await widget.watch(request_update)
+            except:
+                self.log.exception('Widget %r threw exception', widget)
+
+        return asyncio.create_task(catch_wrapper())
 
     async def _init_widgets(self) -> None:
         for widget_list in self._widgets.values():
-            log.debug('initializing %r', widget_list)
+            self.log.debug('initializing %r', widget_list)
             self._widget_tasks.extend(
                 self._start_widget(w) for w in widget_list)
-        log.info('Widgets initialized')
+        self.log.info('Widgets initialized')
 
     async def run(self) -> None:
         await self._init_widgets()
