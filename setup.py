@@ -15,7 +15,7 @@ with open('version.txt', 'rb') as h:
 setuptools.setup(
     name = 'aiopanel',
     version = version,
-    py_modules = ['aiopanel'],
+    py_modules = ['aiopanel', 'logutil'],
     python_requires = '>=3.6',
     entry_points = {
         'console_scripts': [
