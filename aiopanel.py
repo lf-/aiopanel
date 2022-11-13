@@ -21,6 +21,9 @@ import pydbus
 import logutil
 from logutil import APP_NAME, DEFAULT_LOG_LEVEL, LogMixin, init_log_levels_from_env
 
+# prevent running twice when invoked as `python aiopanel.py`
+sys.modules['aiopanel'] = sys.modules[__name__]
+
 try:
     import aiobspwm
 except ImportError:
@@ -400,7 +403,6 @@ class ConnmanWidget(Widget):
         ctx -- context object, passed directly to template
         """
         super().__init__()
-        self._services = ConnmanServiceWatcher(hook=self._on_change)
         self._template = jinja2.Template(fmt, autoescape=False)
         self._ctx = ctx
         self._updated = None
@@ -414,6 +416,7 @@ class ConnmanWidget(Widget):
 
     async def watch(self, request_update: RequestUpdate) -> None:
         self._updated = asyncio.Event()
+        self._services = ConnmanServiceWatcher(hook=self._on_change)
         while True:
             await request_update()
             await self._updated.wait()
